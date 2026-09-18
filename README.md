@@ -13,6 +13,7 @@ Bot Groq cho nhóm LINE của team mua chia. Bot chỉ trả lời khi được 
 - `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/tmp/line_bot_history.db`)
 - `HISTORY_MESSAGE_LIMIT` (tuỳ chọn, mặc định 12; tối đa 30)
 - `HISTORY_STORAGE_LIMIT` (tuỳ chọn, mặc định 200; tối đa 1000)
+- `MAX_MODEL_HISTORY_CHARS` (tuỳ chọn, mặc định 6000; tối đa 12000)
 
 ## Lưu lịch sử sau khi deploy
 
@@ -20,7 +21,7 @@ Bot Groq cho nhóm LINE của team mua chia. Bot chỉ trả lời khi được 
 
 Không cần gắn Volume thì bot vẫn chạy, nhưng lịch sử sẽ mất nếu instance được tạo lại.
 
-Bot lưu tối đa 200 tin nhắn gần nhất của mỗi nhóm và gửi 12 tin mới nhất cho Groq để lấy ngữ cảnh. Bot vẫn chỉ trả lời khi có `@bot`.
+Bot lưu tối đa 200 tin nhắn gần nhất của mỗi nhóm và gửi 12 tin mới nhất, tối đa 6.000 ký tự, cho Groq để lấy ngữ cảnh. Bot vẫn chỉ trả lời khi có `@bot`.
 
 ## Webhook và sử dụng
 

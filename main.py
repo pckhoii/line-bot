@@ -23,6 +23,9 @@ GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 TEXT_TRIGGER = os.getenv("BOT_TEXT_TRIGGER", "@bot").strip().casefold() or "@bot"
 HISTORY_LIMIT = max(2, min(int(os.getenv("HISTORY_MESSAGE_LIMIT", "12")), 30))
 HISTORY_STORAGE_LIMIT = max(20, min(int(os.getenv("HISTORY_STORAGE_LIMIT", "200")), 1000))
+MAX_MODEL_HISTORY_CHARS = max(
+    1000, min(int(os.getenv("MAX_MODEL_HISTORY_CHARS", "6000")), 12000)
+)
 SYSTEM_PROMPT = """Bạn là trợ lý AI nội bộ của team mua chia, không phải trợ lý mua chung.
 Trả lời bằng tiếng Việt, lịch sự, ngắn gọn và thiết thực cho công việc mua chia: tổng hợp nhu cầu, kiểm tra thông tin sản phẩm/nhà cung cấp, giá cả, quy trình và phối hợp trong team.
 Bạn nhận được phần lịch sử gần đây của chính nhóm này; hãy dùng nó để hiểu ngữ cảnh, nhưng không bịa ra dữ liệu chưa có.
@@ -226,6 +229,20 @@ def format_history(history: list[tuple[str, str]]) -> str:
     return "\n".join(f"{labels[role]}: {content}" for role, content in history)
 
 
+def compact_history_for_model(history: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Keep the newest context while preventing an oversized provider request."""
+    remaining = MAX_MODEL_HISTORY_CHARS
+    selected: list[tuple[str, str]] = []
+    for role, content in reversed(history):
+        if remaining <= 0:
+            break
+        if len(content) > remaining:
+            content = f"…{content[-remaining:]}"
+        selected.append((role, content))
+        remaining -= len(content)
+    return list(reversed(selected))
+
+
 async def generate_answer(
     client: httpx.AsyncClient,
     user_text: str,
@@ -234,7 +251,8 @@ async def generate_answer(
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(
-        {"role": role, "content": content} for role, content in history
+        {"role": role, "content": content}
+        for role, content in compact_history_for_model(history)
     )
     if search_web:
         messages.append(
