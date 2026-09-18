@@ -23,6 +23,7 @@ app = FastAPI(title="LINE team purchasing assistant")
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 TEXT_TRIGGER = os.getenv("BOT_TEXT_TRIGGER", "@bot").strip().casefold() or "@bot"
 HISTORY_LIMIT = max(2, min(int(os.getenv("HISTORY_MESSAGE_LIMIT", "12")), 30))
+HISTORY_STORAGE_LIMIT = max(20, min(int(os.getenv("HISTORY_STORAGE_LIMIT", "200")), 1000))
 SYSTEM_PROMPT = """Bạn là trợ lý AI nội bộ của team mua chia, không phải trợ lý mua chung.
 Trả lời bằng tiếng Việt, lịch sự, ngắn gọn và thiết thực cho công việc mua chia: tổng hợp nhu cầu, kiểm tra thông tin sản phẩm/nhà cung cấp, giá cả, quy trình và phối hợp trong team.
 Bạn nhận được phần lịch sử gần đây của chính nhóm này; hãy dùng nó để hiểu ngữ cảnh, nhưng không bịa ra dữ liệu chưa có.
@@ -76,8 +77,16 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
     message = event.get("message", {})
     if event.get("type") != "message" or message.get("type") != "text":
         return
+    message_text = message.get("text", "").strip()
+    if not message_text:
+        return
+
+    conversation_id = conversation_id_for(event)
     if not should_reply(event, message):
-        logger.info("Ignored a message without a bot trigger")
+        # Keep the group context even when the bot is not called. The stored
+        # history is only read back by this same group when it later calls @bot.
+        await asyncio.to_thread(save_member_message, conversation_id, message_text)
+        logger.info("Stored a group message without replying")
         return
 
     reply_token = event.get("replyToken")
@@ -85,11 +94,10 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
         logger.warning("Ignored a bot mention without a reply token")
         return
 
-    user_text = remove_text_trigger(message.get("text", "").strip())
+    user_text = remove_text_trigger(message_text)
     if not user_text:
         return
 
-    conversation_id = conversation_id_for(event)
     try:
         history = await asyncio.to_thread(load_history, conversation_id)
         answer = await generate_answer(user_text, history)
@@ -160,11 +168,27 @@ def load_history(conversation_id: str) -> list[tuple[str, str]]:
     return [(str(role), str(content)) for role, content in rows]
 
 
+def save_member_message(conversation_id: str, text: str) -> None:
+    save_messages(conversation_id, [("user", text)])
+
+
 def save_turn(conversation_id: str, user_text: str, answer: str) -> None:
+    save_messages(conversation_id, [("user", user_text), ("assistant", answer)])
+
+
+def save_messages(conversation_id: str, messages: list[tuple[str, str]]) -> None:
     with open_database() as connection:
         connection.executemany(
             "INSERT INTO conversation_turns (conversation_id, role, content) VALUES (?, ?, ?)",
-            [(conversation_id, "user", user_text), (conversation_id, "assistant", answer)],
+            [(conversation_id, role, content) for role, content in messages],
+        )
+        connection.execute(
+            """DELETE FROM conversation_turns
+            WHERE conversation_id = ? AND id NOT IN (
+                SELECT id FROM conversation_turns
+                WHERE conversation_id = ? ORDER BY id DESC LIMIT ?
+            )""",
+            (conversation_id, conversation_id, HISTORY_STORAGE_LIMIT),
         )
 
 
