@@ -1,14 +1,17 @@
 import base64
+import asyncio
 import hashlib
 import hmac
 import json
 import logging
 import os
+from functools import lru_cache
 from typing import Any
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+from google import genai
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("line-bot")
@@ -16,7 +19,6 @@ logger = logging.getLogger("line-bot")
 app = FastAPI(title="LINE AI mention bot")
 
 LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 SYSTEM_PROMPT = (
     "Bạn là trợ lý của Bot mua chia trong nhóm LINE. "
     "Trả lời bằng tiếng Việt, lịch sự, ngắn gọn và hữu ích. "
@@ -88,7 +90,7 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
         return
 
     try:
-        answer = await generate_answer(client, user_text)
+        answer = await generate_answer(user_text)
         await reply_to_line(client, reply_token, answer)
     except Exception:
         logger.exception("Could not answer the LINE mention")
@@ -118,35 +120,21 @@ def remove_text_trigger(text: str) -> str:
     return text
 
 
-async def generate_answer(client: httpx.AsyncClient, user_text: str) -> str:
-    response = await client.post(
-        OPENAI_RESPONSES_URL,
-        headers={
-            "Authorization": f"Bearer {required_env('OPENAI_API_KEY')}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": os.getenv("OPENAI_MODEL", "gpt-5-mini"),
-            "instructions": SYSTEM_PROMPT,
-            "input": user_text,
-            "max_output_tokens": 350,
-            "store": False,
-        },
+async def generate_answer(user_text: str) -> str:
+    interaction = await asyncio.to_thread(
+        gemini_client().interactions.create,
+        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        input=f"{SYSTEM_PROMPT}\n\nCâu hỏi của người dùng: {user_text}",
     )
-    response.raise_for_status()
-    answer = response.json().get("output_text") or extract_output_text(response.json())
+    answer = getattr(interaction, "output_text", "")
     if not answer:
-        raise RuntimeError("OpenAI returned no text output")
+        raise RuntimeError("Gemini returned no text output")
     return answer[:5000]
 
 
-def extract_output_text(response: dict[str, Any]) -> str:
-    text_parts: list[str] = []
-    for item in response.get("output", []):
-        for content in item.get("content", []):
-            if content.get("type") == "output_text" and content.get("text"):
-                text_parts.append(content["text"])
-    return "\n".join(text_parts)
+@lru_cache(maxsize=1)
+def gemini_client() -> genai.Client:
+    return genai.Client(api_key=required_env("GEMINI_API_KEY"))
 
 
 async def reply_to_line(client: httpx.AsyncClient, reply_token: str, text: str) -> None:

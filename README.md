@@ -1,6 +1,6 @@
 # LINE AI mention bot (Python)
 
-This FastAPI bot receives LINE webhooks at `POST /webhook`, validates the `x-line-signature` HMAC, and uses OpenAI to reply only when a LINE group member mentions the bot.
+This FastAPI bot receives LINE webhooks at `POST /webhook`, validates the `x-line-signature` HMAC, and uses Gemini to reply only when a LINE group member mentions the bot.
 
 ## AI configuration
 
@@ -8,10 +8,12 @@ Add these variables in Railway (and in a local `.env` only if running locally):
 
 - `LINE_CHANNEL_SECRET`
 - `LINE_CHANNEL_ACCESS_TOKEN`
-- `OPENAI_API_KEY`
-- Optional: `OPENAI_MODEL` (defaults to `gpt-5-mini`)
+- `GEMINI_API_KEY`
+- Optional: `GEMINI_MODEL` (defaults to `gemini-3.5-flash-lite`)
 
 The bot only responds in group chats. It checks LINE's structured `mention.mentionees[].isSelf` flag and also supports a text fallback: start a group message with `@bot`, for example `@bot kiểm tra giúp tôi`. Set `BOT_TEXT_TRIGGER` in Railway to use another trigger.
+
+Gemini's free tier is appropriate for testing, but has quotas and its requests may be used to improve Google's products. Do not send company secrets or other sensitive data through the test bot.
 
 ## 1. Rotate the secret shown in the screenshot
 
