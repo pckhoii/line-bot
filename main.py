@@ -250,6 +250,8 @@ async def generate_answer(
     search_web: bool,
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if search_web:
+        messages = []
     # Groq Compound performs server-side web search. Keep that request compact
     # and do not expose the group history to the web-search provider.
     if not search_web:
@@ -293,6 +295,13 @@ async def generate_answer(
         },
         json=request_body,
     )
+    if response.is_error:
+        logger.error(
+            "Groq rejected request: status=%s, payload_bytes=%s, detail=%s",
+            response.status_code,
+            len(json.dumps(request_body, ensure_ascii=False).encode("utf-8")),
+            response.text[:500],
+        )
     response.raise_for_status()
     payload = response.json()
     answer = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
