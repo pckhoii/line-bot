@@ -1,6 +1,17 @@
-# LINE webhook starter
+# LINE AI mention bot (Python)
 
-This is a minimal, secure reply bot. It receives LINE webhooks at `POST /webhook`, validates the `x-line-signature` HMAC, and replies to text messages.
+This FastAPI bot receives LINE webhooks at `POST /webhook`, validates the `x-line-signature` HMAC, and uses OpenAI to reply only when a LINE group member mentions the bot.
+
+## AI configuration
+
+Add these variables in Railway (and in a local `.env` only if running locally):
+
+- `LINE_CHANNEL_SECRET`
+- `LINE_CHANNEL_ACCESS_TOKEN`
+- `OPENAI_API_KEY`
+- Optional: `OPENAI_MODEL` (defaults to `gpt-5-mini`)
+
+The bot checks LINE's structured `mention.mentionees[].isSelf` flag; it ignores every message that doesn't mention the bot.
 
 ## 1. Rotate the secret shown in the screenshot
 
