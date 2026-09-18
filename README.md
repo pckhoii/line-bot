@@ -11,7 +11,7 @@ Add these variables in Railway (and in a local `.env` only if running locally):
 - `OPENAI_API_KEY`
 - Optional: `OPENAI_MODEL` (defaults to `gpt-5-mini`)
 
-The bot checks LINE's structured `mention.mentionees[].isSelf` flag; it ignores every message that doesn't mention the bot.
+The bot only responds in group chats. It checks LINE's structured `mention.mentionees[].isSelf` flag and also supports a text fallback: start a group message with `@bot`, for example `@bot kiểm tra giúp tôi`. Set `BOT_TEXT_TRIGGER` in Railway to use another trigger.
 
 ## 1. Rotate the secret shown in the screenshot
 

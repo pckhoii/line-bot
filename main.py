@@ -23,6 +23,7 @@ SYSTEM_PROMPT = (
     "Nếu không chắc, hãy nói rõ rằng bạn chưa có đủ thông tin; đừng bịa. "
     "Không dùng bảng Markdown."
 )
+TEXT_TRIGGER = os.getenv("BOT_TEXT_TRIGGER", "@bot").strip().casefold()
 
 
 @app.get("/health")
@@ -73,8 +74,8 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
     if event.get("type") != "message" or message.get("type") != "text":
         return
 
-    if not mentions_this_bot(message):
-        logger.info("Ignored a text message without a bot mention")
+    if not should_reply(event, message):
+        logger.info("Ignored a message without a bot trigger")
         return
 
     reply_token = event.get("replyToken")
@@ -82,7 +83,7 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
         logger.warning("Ignored a bot mention without a reply token")
         return
 
-    user_text = message.get("text", "").strip()
+    user_text = remove_text_trigger(message.get("text", "").strip())
     if not user_text:
         return
 
@@ -101,6 +102,20 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
 def mentions_this_bot(message: dict[str, Any]) -> bool:
     mentionees = message.get("mention", {}).get("mentionees", [])
     return any(mention.get("isSelf") is True for mention in mentionees)
+
+
+def should_reply(event: dict[str, Any], message: dict[str, Any]) -> bool:
+    # Keep the bot silent in 1:1 chats. It responds in groups only when it is
+    # a real LINE mention or the member starts the text with the fallback trigger.
+    if event.get("source", {}).get("type") not in {"group", "room"}:
+        return False
+    return mentions_this_bot(message) or message.get("text", "").strip().casefold().startswith(TEXT_TRIGGER)
+
+
+def remove_text_trigger(text: str) -> str:
+    if text.casefold().startswith(TEXT_TRIGGER):
+        return text[len(TEXT_TRIGGER):].strip()
+    return text
 
 
 async def generate_answer(client: httpx.AsyncClient, user_text: str) -> str:
