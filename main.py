@@ -136,7 +136,9 @@ def conversation_id_for(event: dict[str, Any]) -> str:
 
 
 def database_path() -> Path:
-    path = Path(os.getenv("BOT_HISTORY_DB_PATH", "/data/line_bot_history.db"))
+    # /tmp is writable on Railway even before a persistent Volume is attached.
+    # Set BOT_HISTORY_DB_PATH=/data/line_bot_history.db after mounting /data.
+    path = Path(os.getenv("BOT_HISTORY_DB_PATH", "/tmp/line_bot_history.db"))
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

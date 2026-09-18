@@ -9,13 +9,13 @@ Bot Gemini cho nhóm LINE của team mua chia. Bot chỉ trả lời khi đượ
 - `GEMINI_API_KEY`
 - `GEMINI_MODEL` (tuỳ chọn, mặc định `gemini-3.5-flash-lite`)
 - `BOT_TEXT_TRIGGER` (tuỳ chọn, mặc định `@bot`)
-- `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/data/line_bot_history.db`)
+- `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/tmp/line_bot_history.db`)
 - `HISTORY_MESSAGE_LIMIT` (tuỳ chọn, mặc định 12; tối đa 30)
 - `HISTORY_STORAGE_LIMIT` (tuỳ chọn, mặc định 200; tối đa 1000)
 
 ## Lưu lịch sử sau khi deploy
 
-Để lịch sử không mất khi Railway redeploy, trong service Railway tạo **Volume** và mount tại `/data`. Bot đã lưu SQLite vào `/data/line_bot_history.db`.
+Để lịch sử không mất khi Railway redeploy, trong service Railway tạo **Volume** và mount tại `/data`. Sau đó thêm biến `BOT_HISTORY_DB_PATH` với giá trị `/data/line_bot_history.db`.
 
 Không cần gắn Volume thì bot vẫn chạy, nhưng lịch sử sẽ mất nếu instance được tạo lại.
 
