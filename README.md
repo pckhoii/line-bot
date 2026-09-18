@@ -21,7 +21,7 @@ Bot Groq cho nhóm LINE của team mua chia. Bot chỉ trả lời khi được 
 
 Không cần gắn Volume thì bot vẫn chạy, nhưng lịch sử sẽ mất nếu instance được tạo lại.
 
-Bot lưu tối đa 200 tin nhắn gần nhất của mỗi nhóm và gửi 12 tin mới nhất, tối đa 6.000 ký tự, cho Groq để lấy ngữ cảnh. Bot vẫn chỉ trả lời khi có `@bot`.
+Bot lưu tối đa 200 tin nhắn gần nhất của mỗi nhóm và gửi 12 tin mới nhất, tối đa 6.000 ký tự, cho Groq để lấy ngữ cảnh khi chat thường. Lệnh `/web` chỉ gửi câu hỏi hiện tại, không gửi lịch sử group sang dịch vụ web search. Bot vẫn chỉ trả lời khi có `@bot`.
 
 ## Webhook và sử dụng
 

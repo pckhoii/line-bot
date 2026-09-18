@@ -250,10 +250,13 @@ async def generate_answer(
     search_web: bool,
 ) -> str:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(
-        {"role": role, "content": content}
-        for role, content in compact_history_for_model(history)
-    )
+    # Groq Compound performs server-side web search. Keep that request compact
+    # and do not expose the group history to the web-search provider.
+    if not search_web:
+        messages.extend(
+            {"role": role, "content": content}
+            for role, content in compact_history_for_model(history)
+        )
     if search_web:
         messages.append(
             {
