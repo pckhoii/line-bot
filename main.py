@@ -24,6 +24,11 @@ LINE_REPLY_URL = "https://api.line.me/v2/bot/message/reply"
 TEXT_TRIGGER = os.getenv("BOT_TEXT_TRIGGER", "@bot").strip().casefold() or "@bot"
 HISTORY_LIMIT = max(2, min(int(os.getenv("HISTORY_MESSAGE_LIMIT", "12")), 30))
 HISTORY_STORAGE_LIMIT = max(20, min(int(os.getenv("HISTORY_STORAGE_LIMIT", "200")), 1000))
+ENABLE_GOOGLE_SEARCH = os.getenv("ENABLE_GOOGLE_SEARCH", "false").strip().casefold() in {
+    "1",
+    "true",
+    "yes",
+}
 SYSTEM_PROMPT = """Bạn là trợ lý AI nội bộ của team mua chia, không phải trợ lý mua chung.
 Trả lời bằng tiếng Việt, lịch sự, ngắn gọn và thiết thực cho công việc mua chia: tổng hợp nhu cầu, kiểm tra thông tin sản phẩm/nhà cung cấp, giá cả, quy trình và phối hợp trong team.
 Bạn nhận được phần lịch sử gần đây của chính nhóm này; hãy dùng nó để hiểu ngữ cảnh, nhưng không bịa ra dữ liệu chưa có.
@@ -207,11 +212,15 @@ async def generate_answer(user_text: str, history: list[tuple[str, str]]) -> str
         f"Lịch sử gần đây:\n{format_history(history)}\n\n"
         f"Câu hỏi mới của thành viên: {user_text}"
     )
+    request_options: dict[str, Any] = {
+        "model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        "input": prompt,
+    }
+    if ENABLE_GOOGLE_SEARCH:
+        request_options["tools"] = [{"type": "google_search"}]
+
     interaction = await asyncio.to_thread(
-        gemini_client().interactions.create,
-        model=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-        input=prompt,
-        tools=[{"type": "google_search"}],
+        gemini_client().interactions.create, **request_options
     )
     answer = getattr(interaction, "output_text", "")
     if not answer:

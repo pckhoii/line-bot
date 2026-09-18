@@ -12,6 +12,7 @@ Bot Gemini cho nhóm LINE của team mua chia. Bot chỉ trả lời khi đượ
 - `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/tmp/line_bot_history.db`)
 - `HISTORY_MESSAGE_LIMIT` (tuỳ chọn, mặc định 12; tối đa 30)
 - `HISTORY_STORAGE_LIMIT` (tuỳ chọn, mặc định 200; tối đa 1000)
+- `ENABLE_GOOGLE_SEARCH` (tuỳ chọn, mặc định `false`)
 
 ## Lưu lịch sử sau khi deploy
 
@@ -43,4 +44,4 @@ Trong nhóm, ví dụ:
 @bot dựa trên trao đổi phía trên, soạn tin nhắn hỏi nhà cung cấp
 ```
 
-Google Search grounding có thể phát sinh phí/quota theo gói Gemini. Không gửi khóa, mật khẩu, dữ liệu khách hàng hoặc dữ liệu nội bộ nhạy cảm qua bot.
+Google Search grounding cần quota phù hợp của Gemini. Chỉ đặt `ENABLE_GOOGLE_SEARCH=true` sau khi kiểm tra quota/billing của project trong AI Studio; nếu không Gemini có thể trả lỗi `429`. Không gửi khóa, mật khẩu, dữ liệu khách hàng hoặc dữ liệu nội bộ nhạy cảm qua bot.
