@@ -236,7 +236,19 @@ async def generate_answer(
     messages.extend(
         {"role": role, "content": content} for role, content in history
     )
-    messages.append({"role": "user", "content": user_text})
+    if search_web:
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Bắt buộc tra web để trả lời câu hỏi sau. Không đoán bằng kiến thức cũ. "
+                    "Nêu nguồn/link ở cuối câu trả lời.\n\n"
+                    f"Câu hỏi: {user_text}"
+                ),
+            }
+        )
+    else:
+        messages.append({"role": "user", "content": user_text})
 
     request_body: dict[str, Any] = {
         "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
@@ -247,9 +259,8 @@ async def generate_answer(
     if search_web:
         request_body.update(
             {
-                "tools": [{"type": "browser_search"}],
-                "tool_choice": "required",
-                "reasoning_effort": "low",
+                "model": os.getenv("GROQ_WEB_MODEL", "groq/compound"),
+                "search_settings": {"country": "vietnam"},
             }
         )
 

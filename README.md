@@ -8,6 +8,7 @@ Bot Groq cho nhóm LINE của team mua chia. Bot chỉ trả lời khi được 
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `GROQ_API_KEY`
 - `GROQ_MODEL` (tuỳ chọn, mặc định `openai/gpt-oss-20b`)
+- `GROQ_WEB_MODEL` (tuỳ chọn, mặc định `groq/compound`)
 - `BOT_TEXT_TRIGGER` (tuỳ chọn, mặc định `@bot`)
 - `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/tmp/line_bot_history.db`)
 - `HISTORY_MESSAGE_LIMIT` (tuỳ chọn, mặc định 12; tối đa 30)
