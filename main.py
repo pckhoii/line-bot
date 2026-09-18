@@ -273,6 +273,11 @@ async def generate_answer(
     else:
         messages.append({"role": "user", "content": user_text})
 
+    if search_web:
+        # Compound's native web-search endpoint accepts the minimal chat
+        # request shown in Groq's documentation. Keep it strictly minimal.
+        messages = [{"role": "user", "content": user_text}]
+
     request_body: dict[str, Any] = {
         "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
         "messages": messages,
@@ -280,12 +285,10 @@ async def generate_answer(
         "max_completion_tokens": 900,
     }
     if search_web:
-        request_body.update(
-            {
-                "model": os.getenv("GROQ_WEB_MODEL", "groq/compound"),
-                "search_settings": {"country": "vietnam"},
-            }
-        )
+        request_body = {
+            "model": os.getenv("GROQ_WEB_MODEL", "groq/compound"),
+            "messages": messages,
+        }
 
     response = await client.post(
         GROQ_CHAT_URL,
