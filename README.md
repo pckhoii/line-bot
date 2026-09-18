@@ -1,93 +1,43 @@
-# LINE AI mention bot (Python)
+# LINE team mua chia assistant
 
-This FastAPI bot receives LINE webhooks at `POST /webhook`, validates the `x-line-signature` HMAC, and uses Gemini to reply only when a LINE group member mentions the bot.
+Bot Gemini cho nhóm LINE của team mua chia. Bot chỉ trả lời khi được nhắc bằng `@bot` ở đầu tin nhắn (hoặc LINE mention thực), tự dùng Google Search khi cần thông tin mới và lưu ngữ cảnh gần đây riêng theo từng nhóm.
 
-## AI configuration
-
-Add these variables in Railway (and in a local `.env` only if running locally):
+## Biến Railway
 
 - `LINE_CHANNEL_SECRET`
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `GEMINI_API_KEY`
-- Optional: `GEMINI_MODEL` (defaults to `gemini-3.5-flash-lite`)
+- `GEMINI_MODEL` (tuỳ chọn, mặc định `gemini-3.5-flash-lite`)
+- `BOT_TEXT_TRIGGER` (tuỳ chọn, mặc định `@bot`)
+- `BOT_HISTORY_DB_PATH` (tuỳ chọn, mặc định `/data/line_bot_history.db`)
+- `HISTORY_MESSAGE_LIMIT` (tuỳ chọn, mặc định 12; tối đa 30)
 
-The bot only responds in group chats. It checks LINE's structured `mention.mentionees[].isSelf` flag and also supports a text fallback: start a group message with `@bot`, for example `@bot kiểm tra giúp tôi`. Set `BOT_TEXT_TRIGGER` in Railway to use another trigger.
+## Lưu lịch sử sau khi deploy
 
-Gemini's free tier is appropriate for testing, but has quotas and its requests may be used to improve Google's products. Do not send company secrets or other sensitive data through the test bot.
+Để lịch sử không mất khi Railway redeploy, trong service Railway tạo **Volume** và mount tại `/data`. Bot đã lưu SQLite vào `/data/line_bot_history.db`.
 
-## 1. Rotate the secret shown in the screenshot
+Không cần gắn Volume thì bot vẫn chạy, nhưng lịch sử sẽ mất nếu instance được tạo lại.
 
-The Channel secret in the screenshot should be treated as exposed. Reissue it in the LINE Developers Console before placing a new value in `.env`.
+## Webhook và sử dụng
 
-## 2. Get the two credentials
+Webhook URL trong LINE:
 
-In **LINE Developers Console → your Messaging API channel → Messaging API**:
-
-1. Copy the newly reissued **Channel secret**.
-2. In **Channel access token**, issue a long-lived token and copy it.
-
-Do not paste either value into chat or commit it to Git.
-
-## 3. Deploy permanently to Railway (recommended)
-
-1. Create an empty GitHub repository and push this project. The `.gitignore` prevents `.env` from being uploaded.
-2. In Railway, create a project and select **Deploy from GitHub Repo**.
-3. In the service's **Variables** tab, add `LINE_CHANNEL_SECRET` and `LINE_CHANNEL_ACCESS_TOKEN`. Do not set `PORT`; Railway supplies it.
-4. In **Settings → Networking**, choose **Generate Domain**.
-5. Wait for the deploy to become active. Open `https://YOUR-APP.up.railway.app/health`; it should return an `ok: true` response.
-
-The included `railway.json` sets the start command, `/health` deployment check, and restart behavior. The service keeps running when your computer is off.
-
-## 4. Connect it in LINE
-
-In the Webhook URL box, enter:
-
-```
-https://YOUR-APP.up.railway.app/webhook
+```text
+https://YOUR-RAILWAY-DOMAIN/webhook
 ```
 
-Click **Save**, then **Verify**. A successful verify request contains no events, which this server handles. Turn on **Use webhook** in the Messaging API settings.
+Health check:
 
-In LINE Official Account Manager, turn off **Greeting message** and **Auto-reply messages** while testing, otherwise those built-in messages can be confused with the bot's reply.
-
-## Optional: run only on your computer for development
-
-In PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-notepad .env
-node server.js
+```text
+https://YOUR-RAILWAY-DOMAIN/health
 ```
 
-`http://localhost:3000/health` should return `{ "ok": true, "service": "line-webhook" }`.
+Trong nhóm, ví dụ:
 
-### Make localhost public with HTTPS
-
-In a second PowerShell window:
-
-```powershell
-npx.cmd localtunnel --port 3000
+```text
+@bot tổng hợp giúp các việc cần chốt hôm nay
+@bot tra giá thị trường sản phẩm X mới nhất
+@bot dựa trên trao đổi phía trên, soạn tin nhắn hỏi nhà cung cấp
 ```
 
-Copy the HTTPS URL it prints, for example `https://purple-bot.loca.lt`.
-
-### Connect it in LINE
-
-In the Webhook URL box shown in the screenshot, enter:
-
-```
-https://YOUR-TUNNEL-URL.loca.lt/webhook
-```
-
-Click **Save**, then **Verify**. A successful verify request contains no events, which this server handles. Turn on **Use webhook** in the Messaging API settings.
-
-In LINE Official Account Manager, turn off **Greeting message** and **Auto-reply messages** while testing, otherwise those built-in messages can be confused with the bot's reply.
-
-## 5. Test in LINE
-
-Scan the QR code in the Messaging API tab to add the Official Account as a friend. Send `xin chào`, `giờ làm việc`, `địa chỉ`, or any other text. The terminal prints received messages and the bot replies in the LINE chat.
-
-## Keep it running
-
-Localtunnel is only for development. Its address changes when stopped, so update the Webhook URL after restarting it. For production, deploy this server to a host with persistent HTTPS and configure the same two environment variables there.
+Google Search grounding có thể phát sinh phí/quota theo gói Gemini. Không gửi khóa, mật khẩu, dữ liệu khách hàng hoặc dữ liệu nội bộ nhạy cảm qua bot.
