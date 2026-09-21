@@ -16,7 +16,11 @@ import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from report_tri_an import ReportDataError, build_tri_an_summary, render_report_image
+from report_tri_an import (
+    ReportDataError,
+    build_tri_an_summary,
+    generate_google_sheet_report_image,
+)
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("line-bot")
@@ -118,7 +122,7 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
             report = await asyncio.to_thread(build_tri_an_summary, report_date)
             image_name = f"{uuid4().hex}.png"
             image_path = report_image_directory() / image_name
-            await asyncio.to_thread(render_report_image, report, image_path)
+            await asyncio.to_thread(generate_google_sheet_report_image, report, image_path)
             await asyncio.to_thread(remove_expired_report_images)
             await asyncio.to_thread(save_turn, conversation_id, user_text, report.summary)
             await reply_report_to_line(

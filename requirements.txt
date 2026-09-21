@@ -5,3 +5,4 @@ pandas==2.3.3
 google-api-python-client==2.187.0
 google-auth>=2.41,<3
 Pillow==11.3.0
+PyMuPDF==1.26.5

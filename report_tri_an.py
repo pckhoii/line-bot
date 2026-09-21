@@ -16,6 +16,9 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import fitz
+import httpx
+from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from PIL import Image, ImageDraw, ImageFont
@@ -34,6 +37,9 @@ class TriAnReport:
 
 ORIGINS = ("NỘI ĐỊA", "NHẬP KHẨU")
 SHEETS_SCOPE = ("https://www.googleapis.com/auth/spreadsheets.readonly",)
+SHEETS_WRITE_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+DRIVE_READ_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+OUTPUT_SHEET_DEFAULT = "output_tri_an"
 
 
 def build_tri_an_summary(requested_date: str | None = None) -> TriAnReport:
@@ -68,14 +74,18 @@ def build_tri_an_summary(requested_date: str | None = None) -> TriAnReport:
     )
 
 
-def sheets_service():
+def service_account_credentials(write: bool = False):
     encoded_key = required_env("GOOGLE_SERVICE_ACCOUNT_JSON_B64")
     try:
         key_info = json.loads(base64.b64decode(encoded_key).decode("utf-8"))
     except Exception as error:  # noqa: BLE001
         raise ReportDataError("GOOGLE_SERVICE_ACCOUNT_JSON_B64 không phải JSON key Base64 hợp lệ.") from error
-    credentials = service_account.Credentials.from_service_account_info(key_info, scopes=SHEETS_SCOPE)
-    return build("sheets", "v4", credentials=credentials, cache_discovery=False)
+    scopes = (SHEETS_WRITE_SCOPE, DRIVE_READ_SCOPE) if write else SHEETS_SCOPE
+    return service_account.Credentials.from_service_account_info(key_info, scopes=scopes)
+
+
+def sheets_service(write: bool = False):
+    return build("sheets", "v4", credentials=service_account_credentials(write), cache_discovery=False)
 
 
 def read_table(service: Any, spreadsheet_id: str, tab_name: str) -> pd.DataFrame:
@@ -266,6 +276,216 @@ def render_report_image(report: TriAnReport, output_path: Path) -> None:
         top += section_height + 28
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG", optimize=True)
+
+
+def generate_google_sheet_report_image(report: TriAnReport, output_path: Path) -> str:
+    """Write the report to the dedicated output tab, then export that tab to PNG."""
+    spreadsheet_id = required_env("GOOGLE_SHEET_ID")
+    service = sheets_service(write=True)
+    output_sheet_id = write_output_sheet(service, spreadsheet_id, report)
+    pdf_bytes = export_output_sheet_pdf(spreadsheet_id, output_sheet_id)
+    render_pdf_to_png(pdf_bytes, output_path)
+    return output_sheet_name()
+
+
+def write_output_sheet(service: Any, spreadsheet_id: str, report: TriAnReport) -> int:
+    name = output_sheet_name()
+    metadata = service.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets(properties(sheetId,title,gridProperties))",
+    ).execute()
+    properties = next(
+        (item["properties"] for item in metadata.get("sheets", []) if item["properties"]["title"] == name),
+        None,
+    )
+    if properties is None:
+        response = service.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={
+                "requests": [
+                    {
+                        "addSheet": {
+                            "properties": {
+                                "title": name,
+                                "gridProperties": {"rowCount": 100, "columnCount": 10},
+                            }
+                        }
+                    }
+                ]
+            },
+        ).execute()
+        sheet_id = int(response["replies"][0]["addSheet"]["properties"]["sheetId"])
+        row_count, column_count = 100, 10
+    else:
+        sheet_id = int(properties["sheetId"])
+        grid = properties.get("gridProperties", {})
+        row_count = max(int(grid.get("rowCount", 100)), 100)
+        column_count = max(int(grid.get("columnCount", 10)), 10)
+
+    layout = output_layout(report)
+    used_rows = len(layout["values"])
+    service.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id, range=quoted_tab_range(name), body={}
+    ).execute()
+    service.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"{quoted_tab_range(name)}!A1:H{used_rows}",
+        valueInputOption="RAW",
+        body={"values": layout["values"]},
+    ).execute()
+    service.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": output_format_requests(sheet_id, row_count, column_count, layout)},
+    ).execute()
+    return sheet_id
+
+
+def output_layout(report: TriAnReport) -> dict[str, Any]:
+    values: list[list[Any]] = [
+        [f"DỰ ÁN TRI ÂN BÁNH TƯƠI - BC TỒN KHO ĐẦU KỲ & SỐ BÁN REALTIME {report.report_date:%d-%m-%Y}"] + [""] * 7,
+        [""] * 8,
+    ]
+    sections: list[dict[str, Any]] = []
+    labels = ["Miền", "RSM", "SLST", "Tồn đầu kỳ kho\nsiêu thị", "Tổng SL bán\nđến now", "Tồn đầu kỳ Trung\nBình / ST", "Trung bình SL bán\nđến now / ST", "Tỷ lệ bán / tồn"]
+    for index, origin in enumerate(ORIGINS):
+        section_row = len(values)
+        values.append([origin] + [""] * 7)
+        header_row = len(values)
+        values.append(labels)
+        rows = display_rows(report.base, origin)
+        data_start = len(values)
+        for row in rows:
+            values.append([
+                row["region"], row["rsm"], row["stores"], row["stock"], row["sold"],
+                row["stock_per_store"], row["sold_per_store"], row["ratio"],
+            ])
+        sections.append({
+            "origin": origin,
+            "section_row": section_row,
+            "header_row": header_row,
+            "data_start": data_start,
+            "data_end": len(values),
+            "rows": rows,
+        })
+        if index < len(ORIGINS) - 1:
+            values.append([""] * 8)
+    return {"values": values, "sections": sections, "title_row": 0}
+
+
+def output_format_requests(
+    sheet_id: int, row_count: int, column_count: int, layout: dict[str, Any]
+) -> list[dict[str, Any]]:
+    used_rows = len(layout["values"])
+    whole_sheet = grid_range(sheet_id, 0, row_count, 0, column_count)
+    report_range = grid_range(sheet_id, 0, used_rows, 0, 8)
+    requests: list[dict[str, Any]] = [
+        {"unmergeCells": {"range": whole_sheet}},
+        {"repeatCell": {"range": whole_sheet, "cell": {"userEnteredFormat": {}}, "fields": "userEnteredFormat"}},
+        {"repeatCell": {"range": report_range, "cell": {"userEnteredFormat": base_cell_format()}, "fields": "userEnteredFormat"}},
+        {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"hideGridlines": True}}, "fields": "gridProperties.hideGridlines"}},
+        {"mergeCells": {"range": grid_range(sheet_id, 0, 1, 0, 8), "mergeType": "MERGE_ALL"}},
+        {"repeatCell": {"range": grid_range(sheet_id, 0, 1, 0, 8), "cell": {"userEnteredFormat": title_format()}, "fields": "userEnteredFormat"}},
+        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", 0, 1), "properties": {"pixelSize": 32}, "fields": "pixelSize"}},
+        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", 1, used_rows), "properties": {"pixelSize": 23}, "fields": "pixelSize"}},
+    ]
+    widths = [105, 185, 74, 145, 132, 152, 168, 106]
+    for column, width in enumerate(widths):
+        requests.append({"updateDimensionProperties": {"range": dimension_range(sheet_id, "COLUMNS", column, column + 1), "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+    for section in layout["sections"]:
+        color = "#59c99c" if section["origin"] == "NỘI ĐỊA" else "#13a4cc"
+        section_row = section["section_row"]
+        header_row = section["header_row"]
+        data_start = section["data_start"]
+        data_end = section["data_end"]
+        requests.extend([
+            {"mergeCells": {"range": grid_range(sheet_id, section_row, section_row + 1, 0, 8), "mergeType": "MERGE_ALL"}},
+            {"repeatCell": {"range": grid_range(sheet_id, section_row, section_row + 1, 0, 8), "cell": {"userEnteredFormat": section_format(color)}, "fields": "userEnteredFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, header_row, header_row + 1, 0, 8), "cell": {"userEnteredFormat": header_format()}, "fields": "userEnteredFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, header_row, data_end, 0, 8), "cell": {"userEnteredFormat": bordered_format()}, "fields": "userEnteredFormat.borders"}},
+            {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", section_row, section_row + 1), "properties": {"pixelSize": 27}, "fields": "pixelSize"}},
+            {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", header_row, header_row + 1), "properties": {"pixelSize": 43}, "fields": "pixelSize"}},
+            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, 3, 7), "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}}, "fields": "userEnteredFormat.numberFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, 7, 8), "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}}, "fields": "userEnteredFormat.numberFormat"}},
+        ])
+        for offset, row in enumerate(section["rows"]):
+            row_index = data_start + offset
+            if row["type"] == "subtotal":
+                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 0, 8), "cell": {"userEnteredFormat": total_format("#dbe7f2")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
+            elif row["type"] == "grand_total":
+                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 0, 8), "cell": {"userEnteredFormat": total_format("#d6ebc4")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
+            else:
+                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 7, 8), "cell": {"userEnteredFormat": rgb(ratio_color(row["ratio"]))}, "fields": "userEnteredFormat.backgroundColor"}})
+    return requests
+
+
+def grid_range(sheet_id: int, start_row: int, end_row: int, start_column: int, end_column: int) -> dict[str, int]:
+    return {"sheetId": sheet_id, "startRowIndex": start_row, "endRowIndex": end_row, "startColumnIndex": start_column, "endColumnIndex": end_column}
+
+
+def dimension_range(sheet_id: int, dimension: str, start: int, end: int) -> dict[str, Any]:
+    return {"sheetId": sheet_id, "dimension": dimension, "startIndex": start, "endIndex": end}
+
+
+def rgb(hex_color: str) -> dict[str, dict[str, float]]:
+    color = hex_color.lstrip("#")
+    return {"backgroundColor": {"red": int(color[0:2], 16) / 255, "green": int(color[2:4], 16) / 255, "blue": int(color[4:6], 16) / 255}}
+
+
+def base_cell_format() -> dict[str, Any]:
+    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", "textFormat": {"fontFamily": "Arial", "fontSize": 10}}
+
+
+def title_format() -> dict[str, Any]:
+    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "textFormat": {"fontFamily": "Arial", "fontSize": 14, "bold": True, "foregroundColor": {"red": 0.07, "green": 0.15, "blue": 0.12}}}
+
+
+def section_format(color: str) -> dict[str, Any]:
+    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", **rgb(color), "textFormat": {"fontFamily": "Arial", "fontSize": 12, "bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}}
+
+
+def header_format() -> dict[str, Any]:
+    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", **rgb("#123d30"), "textFormat": {"fontFamily": "Arial", "fontSize": 10, "bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}}
+
+
+def bordered_format() -> dict[str, Any]:
+    border = {"style": "SOLID", "color": {"red": 0.15, "green": 0.22, "blue": 0.27}}
+    return {"borders": {"top": border, "bottom": border, "left": border, "right": border}}
+
+
+def total_format(color: str) -> dict[str, Any]:
+    return {**rgb(color), "textFormat": {"fontFamily": "Arial", "fontSize": 10, "bold": True, "foregroundColor": {"red": 0.78, "green": 0.12, "blue": 0.12}}}
+
+
+def output_sheet_name() -> str:
+    return os.getenv("GOOGLE_SHEET_OUTPUT_TAB", OUTPUT_SHEET_DEFAULT).strip() or OUTPUT_SHEET_DEFAULT
+
+
+def export_output_sheet_pdf(spreadsheet_id: str, sheet_id: int) -> bytes:
+    credentials = service_account_credentials(write=True)
+    credentials.refresh(GoogleRequest())
+    response = httpx.get(
+        f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export",
+        params={"format": "pdf", "gid": str(sheet_id), "single": "true", "size": "A3", "portrait": "false", "fitw": "true", "scale": "4", "gridlines": "false", "sheetnames": "false", "pagenumbers": "false", "top_margin": "0.15", "bottom_margin": "0.15", "left_margin": "0.15", "right_margin": "0.15"},
+        headers={"Authorization": f"Bearer {credentials.token}"},
+        timeout=60,
+        follow_redirects=True,
+    )
+    if response.is_error or not response.content:
+        raise ReportDataError(f"Google không export được tab {output_sheet_name()} (HTTP {response.status_code}).")
+    return response.content
+
+
+def render_pdf_to_png(pdf_bytes: bytes, output_path: Path) -> None:
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if document.page_count != 1:
+            raise ReportDataError("Tab output_tri_an bị export thành nhiều trang; cần thu gọn bố cục.")
+        page = document.load_page(0)
+        pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pixmap.save(str(output_path))
+    finally:
+        document.close()
 
 
 def display_rows(base: pd.DataFrame, origin: str) -> list[dict[str, Any]]:
