@@ -307,7 +307,7 @@ def write_output_sheet(service: Any, spreadsheet_id: str, report: TriAnReport) -
                         "addSheet": {
                             "properties": {
                                 "title": name,
-                                "gridProperties": {"rowCount": 100, "columnCount": 10},
+                                "gridProperties": {"rowCount": 100, "columnCount": 14},
                             }
                         }
                     }
@@ -315,12 +315,12 @@ def write_output_sheet(service: Any, spreadsheet_id: str, report: TriAnReport) -
             },
         ).execute()
         sheet_id = int(response["replies"][0]["addSheet"]["properties"]["sheetId"])
-        row_count, column_count = 100, 10
+        row_count, column_count = 100, 14
     else:
         sheet_id = int(properties["sheetId"])
         grid = properties.get("gridProperties", {})
         row_count = max(int(grid.get("rowCount", 100)), 100)
-        column_count = max(int(grid.get("columnCount", 10)), 10)
+        column_count = max(int(grid.get("columnCount", 14)), 14)
 
     layout = output_layout(report)
     used_rows = len(layout["values"])
@@ -329,7 +329,11 @@ def write_output_sheet(service: Any, spreadsheet_id: str, report: TriAnReport) -
     ).execute()
     service.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
-        range=f"{quoted_tab_range(name)}!A1:H{used_rows}",
+        range=(
+            f"{quoted_tab_range(name)}!"
+            f"{column_letter(layout['start_column'] + 1)}{layout['start_row'] + 1}:"
+            f"{column_letter(layout['start_column'] + 8)}{layout['start_row'] + used_rows}"
+        ),
         valueInputOption="RAW",
         body={"values": layout["values"]},
     ).execute()
@@ -369,52 +373,87 @@ def output_layout(report: TriAnReport) -> dict[str, Any]:
         })
         if index < len(ORIGINS) - 1:
             values.append([""] * 8)
-    return {"values": values, "sections": sections, "title_row": 0}
+    # Match the original Excel template: title at D2 and report tables at D4:K.
+    # The left/right spacer columns make the exported PDF visually centered.
+    return {
+        "values": values,
+        "sections": sections,
+        "title_row": 0,
+        "start_row": 1,
+        "start_column": 3,
+    }
 
 
 def output_format_requests(
     sheet_id: int, row_count: int, column_count: int, layout: dict[str, Any]
 ) -> list[dict[str, Any]]:
     used_rows = len(layout["values"])
+    start_row = int(layout["start_row"])
+    start_column = int(layout["start_column"])
+    end_column = start_column + 8
     whole_sheet = grid_range(sheet_id, 0, row_count, 0, column_count)
-    report_range = grid_range(sheet_id, 0, used_rows, 0, 8)
+    report_range = grid_range(sheet_id, start_row, start_row + used_rows, start_column, end_column)
     requests: list[dict[str, Any]] = [
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {"rowCount": max(row_count, start_row + used_rows + 2), "columnCount": max(column_count, end_column + 3)},
+                },
+                "fields": "gridProperties.rowCount,gridProperties.columnCount",
+            }
+        },
         {"unmergeCells": {"range": whole_sheet}},
         {"repeatCell": {"range": whole_sheet, "cell": {"userEnteredFormat": {}}, "fields": "userEnteredFormat"}},
         {"repeatCell": {"range": report_range, "cell": {"userEnteredFormat": base_cell_format()}, "fields": "userEnteredFormat"}},
         {"updateSheetProperties": {"properties": {"sheetId": sheet_id, "gridProperties": {"hideGridlines": True}}, "fields": "gridProperties.hideGridlines"}},
-        {"mergeCells": {"range": grid_range(sheet_id, 0, 1, 0, 8), "mergeType": "MERGE_ALL"}},
-        {"repeatCell": {"range": grid_range(sheet_id, 0, 1, 0, 8), "cell": {"userEnteredFormat": title_format()}, "fields": "userEnteredFormat"}},
-        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", 0, 1), "properties": {"pixelSize": 32}, "fields": "pixelSize"}},
-        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", 1, used_rows), "properties": {"pixelSize": 23}, "fields": "pixelSize"}},
+        {"mergeCells": {"range": grid_range(sheet_id, start_row, start_row + 1, start_column, end_column), "mergeType": "MERGE_ALL"}},
+        {"repeatCell": {"range": grid_range(sheet_id, start_row, start_row + 1, start_column, end_column), "cell": {"userEnteredFormat": title_format()}, "fields": "userEnteredFormat"}},
+        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", start_row, start_row + 1), "properties": {"pixelSize": 34}, "fields": "pixelSize"}},
+        {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", start_row + 1, start_row + used_rows), "properties": {"pixelSize": 24}, "fields": "pixelSize"}},
     ]
+    # Same relative column proportions as the workbook shared by the team.
     widths = [105, 185, 74, 145, 132, 152, 168, 106]
-    for column, width in enumerate(widths):
+    for column, width in enumerate(widths, start=start_column):
         requests.append({"updateDimensionProperties": {"range": dimension_range(sheet_id, "COLUMNS", column, column + 1), "properties": {"pixelSize": width}, "fields": "pixelSize"}})
+    for spacer_start, spacer_end in ((0, start_column), (end_column, min(end_column + 3, column_count))):
+        if spacer_start < spacer_end:
+            requests.append({"updateDimensionProperties": {"range": dimension_range(sheet_id, "COLUMNS", spacer_start, spacer_end), "properties": {"pixelSize": 30}, "fields": "pixelSize"}})
     for section in layout["sections"]:
-        color = "#59c99c" if section["origin"] == "NỘI ĐỊA" else "#13a4cc"
-        section_row = section["section_row"]
-        header_row = section["header_row"]
-        data_start = section["data_start"]
-        data_end = section["data_end"]
+        color = "#57CC99" if section["origin"] == "NỘI ĐỊA" else "#0096C7"
+        section_row = start_row + section["section_row"]
+        header_row = start_row + section["header_row"]
+        data_start = start_row + section["data_start"]
+        data_end = start_row + section["data_end"]
         requests.extend([
-            {"mergeCells": {"range": grid_range(sheet_id, section_row, section_row + 1, 0, 8), "mergeType": "MERGE_ALL"}},
-            {"repeatCell": {"range": grid_range(sheet_id, section_row, section_row + 1, 0, 8), "cell": {"userEnteredFormat": section_format(color)}, "fields": "userEnteredFormat"}},
-            {"repeatCell": {"range": grid_range(sheet_id, header_row, header_row + 1, 0, 8), "cell": {"userEnteredFormat": header_format()}, "fields": "userEnteredFormat"}},
-            {"repeatCell": {"range": grid_range(sheet_id, header_row, data_end, 0, 8), "cell": {"userEnteredFormat": bordered_format()}, "fields": "userEnteredFormat.borders"}},
+            {"mergeCells": {"range": grid_range(sheet_id, section_row, section_row + 1, start_column, end_column), "mergeType": "MERGE_ALL"}},
+            {"repeatCell": {"range": grid_range(sheet_id, section_row, section_row + 1, start_column, end_column), "cell": {"userEnteredFormat": section_format(color)}, "fields": "userEnteredFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, header_row, header_row + 1, start_column, end_column), "cell": {"userEnteredFormat": header_format("#12372A")}, "fields": "userEnteredFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, header_row, data_end, start_column, end_column), "cell": {"userEnteredFormat": dashed_cell_borders()}, "fields": "userEnteredFormat.borders"}},
             {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", section_row, section_row + 1), "properties": {"pixelSize": 27}, "fields": "pixelSize"}},
             {"updateDimensionProperties": {"range": dimension_range(sheet_id, "ROWS", header_row, header_row + 1), "properties": {"pixelSize": 43}, "fields": "pixelSize"}},
-            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, 3, 7), "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}}, "fields": "userEnteredFormat.numberFormat"}},
-            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, 7, 8), "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}}, "fields": "userEnteredFormat.numberFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, start_column + 1, start_column + 2), "cell": {"userEnteredFormat": {"horizontalAlignment": "LEFT"}}, "fields": "userEnteredFormat.horizontalAlignment"}},
+            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, start_column + 3, start_column + 7), "cell": {"userEnteredFormat": {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}}, "fields": "userEnteredFormat.numberFormat"}},
+            {"repeatCell": {"range": grid_range(sheet_id, data_start, data_end, start_column + 7, end_column), "cell": {"userEnteredFormat": {"numberFormat": {"type": "PERCENT", "pattern": "0%"}}}, "fields": "userEnteredFormat.numberFormat"}},
         ])
+        for offset, header_color in enumerate(("#12372A", "#12372A", "#1F5F4A", "#23866F", "#23866F", "#4F9A68", "#4F9A68", "#1F5F4A")):
+            requests.append({"repeatCell": {"range": grid_range(sheet_id, header_row, header_row + 1, start_column + offset, start_column + offset + 1), "cell": {"userEnteredFormat": header_format(header_color)}, "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)"}})
         for offset, row in enumerate(section["rows"]):
             row_index = data_start + offset
             if row["type"] == "subtotal":
-                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 0, 8), "cell": {"userEnteredFormat": total_format("#dbe7f2")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
+                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, start_column, end_column), "cell": {"userEnteredFormat": total_format("#DCEAF7")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
             elif row["type"] == "grand_total":
-                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 0, 8), "cell": {"userEnteredFormat": total_format("#d6ebc4")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
-            else:
-                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, 7, 8), "cell": {"userEnteredFormat": rgb(ratio_color(row["ratio"]))}, "fields": "userEnteredFormat.backgroundColor"}})
+                requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, start_column, end_column), "cell": {"userEnteredFormat": total_format("#C8E6B8")}, "fields": "userEnteredFormat(backgroundColor,textFormat)"}})
+            # Excel used a red -> yellow -> green colour scale on the ratio column,
+            # including totals. Rendering the equivalent colour directly keeps PDF/PNG identical.
+            requests.append({"repeatCell": {"range": grid_range(sheet_id, row_index, row_index + 1, start_column + 7, end_column), "cell": {"userEnteredFormat": rgb(ratio_color(row["ratio"]))}, "fields": "userEnteredFormat.backgroundColor"}})
+
+        for merge_start, merge_end in region_merge_ranges(section["rows"], data_start):
+            requests.append({"mergeCells": {"range": grid_range(sheet_id, merge_start, merge_end, start_column, start_column + 1), "mergeType": "MERGE_ALL"}})
+            requests.append({"repeatCell": {"range": grid_range(sheet_id, merge_start, merge_end, start_column, start_column + 1), "cell": {"userEnteredFormat": region_format()}, "fields": "userEnteredFormat.horizontalAlignment,userEnteredFormat.verticalAlignment,userEnteredFormat.textFormat"}})
+
+        # The table body uses dashed horizontal separators; its outline/header use a stronger border.
+        requests.extend(outer_table_border_requests(sheet_id, section_row, data_end, start_column, end_column))
     return requests
 
 
@@ -424,6 +463,15 @@ def grid_range(sheet_id: int, start_row: int, end_row: int, start_column: int, e
 
 def dimension_range(sheet_id: int, dimension: str, start: int, end: int) -> dict[str, Any]:
     return {"sheetId": sheet_id, "dimension": dimension, "startIndex": start, "endIndex": end}
+
+
+def column_letter(column: int) -> str:
+    """Convert a one-indexed column number into its A1 notation counterpart."""
+    result = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        result = chr(65 + remainder) + result
+    return result
 
 
 def rgb(hex_color: str) -> dict[str, dict[str, float]]:
@@ -443,13 +491,69 @@ def section_format(color: str) -> dict[str, Any]:
     return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", **rgb(color), "textFormat": {"fontFamily": "Arial", "fontSize": 12, "bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}}
 
 
-def header_format() -> dict[str, Any]:
-    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", **rgb("#123d30"), "textFormat": {"fontFamily": "Arial", "fontSize": 10, "bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}}
+def header_format(color: str) -> dict[str, Any]:
+    return {"horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP", **rgb(color), "textFormat": {"fontFamily": "Arial", "fontSize": 10, "bold": True, "foregroundColor": {"red": 1, "green": 1, "blue": 1}}}
 
 
-def bordered_format() -> dict[str, Any]:
-    border = {"style": "SOLID", "color": {"red": 0.15, "green": 0.22, "blue": 0.27}}
-    return {"borders": {"top": border, "bottom": border, "left": border, "right": border}}
+def dashed_cell_borders() -> dict[str, Any]:
+    vertical = sheet_border("SOLID", "#334155")
+    horizontal = sheet_border("DASHED", "#94A3B8")
+    return {"borders": {"top": horizontal, "bottom": horizontal, "left": vertical, "right": vertical}}
+
+
+def sheet_border(style: str, color: str) -> dict[str, Any]:
+    value = color.lstrip("#")
+    return {
+        "style": style,
+        "color": {
+            "red": int(value[0:2], 16) / 255,
+            "green": int(value[2:4], 16) / 255,
+            "blue": int(value[4:6], 16) / 255,
+        },
+    }
+
+
+def region_format() -> dict[str, Any]:
+    return {
+        "horizontalAlignment": "CENTER",
+        "verticalAlignment": "MIDDLE",
+        "textFormat": {"fontFamily": "Arial", "fontSize": 10, "bold": True},
+    }
+
+
+def region_merge_ranges(rows: list[dict[str, Any]], data_start: int) -> list[tuple[int, int]]:
+    """Return vertical cell ranges for Miền, ending each merge before a Total row."""
+    ranges: list[tuple[int, int]] = []
+    active_start: int | None = None
+    for index, row in enumerate(rows):
+        absolute_row = data_start + index
+        if row["type"] == "detail":
+            if row["region"]:
+                if active_start is not None and absolute_row - active_start > 1:
+                    ranges.append((active_start, absolute_row))
+                active_start = absolute_row
+            continue
+        if active_start is not None and absolute_row - active_start > 1:
+            ranges.append((active_start, absolute_row))
+        active_start = None
+    if active_start is not None and data_start + len(rows) - active_start > 1:
+        ranges.append((active_start, data_start + len(rows)))
+    return ranges
+
+
+def outer_table_border_requests(
+    sheet_id: int, section_row: int, data_end: int, start_column: int, end_column: int
+) -> list[dict[str, Any]]:
+    medium = sheet_border("SOLID_MEDIUM", "#111111")
+    solid = sheet_border("SOLID", "#111111")
+    header_row = section_row + 1
+    return [
+        {"repeatCell": {"range": grid_range(sheet_id, section_row, section_row + 1, start_column, end_column), "cell": {"userEnteredFormat": {"borders": {"top": medium, "bottom": solid}}}, "fields": "userEnteredFormat.borders.top,userEnteredFormat.borders.bottom"}},
+        {"repeatCell": {"range": grid_range(sheet_id, header_row, header_row + 1, start_column, end_column), "cell": {"userEnteredFormat": {"borders": {"top": solid, "bottom": solid}}}, "fields": "userEnteredFormat.borders.top,userEnteredFormat.borders.bottom"}},
+        {"repeatCell": {"range": grid_range(sheet_id, section_row, data_end, start_column, start_column + 1), "cell": {"userEnteredFormat": {"borders": {"left": medium}}}, "fields": "userEnteredFormat.borders.left"}},
+        {"repeatCell": {"range": grid_range(sheet_id, section_row, data_end, end_column - 1, end_column), "cell": {"userEnteredFormat": {"borders": {"right": medium}}}, "fields": "userEnteredFormat.borders.right"}},
+        {"repeatCell": {"range": grid_range(sheet_id, data_end - 1, data_end, start_column, end_column), "cell": {"userEnteredFormat": {"borders": {"bottom": medium}}}, "fields": "userEnteredFormat.borders.bottom"}},
+    ]
 
 
 def total_format(color: str) -> dict[str, Any]:
@@ -465,7 +569,7 @@ def export_output_sheet_pdf(spreadsheet_id: str, sheet_id: int) -> bytes:
     credentials.refresh(GoogleRequest())
     response = httpx.get(
         f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export",
-        params={"format": "pdf", "gid": str(sheet_id), "single": "true", "size": "A3", "portrait": "false", "fitw": "true", "scale": "4", "gridlines": "false", "sheetnames": "false", "pagenumbers": "false", "top_margin": "0.15", "bottom_margin": "0.15", "left_margin": "0.15", "right_margin": "0.15"},
+        params={"format": "pdf", "gid": str(sheet_id), "single": "true", "size": "A3", "portrait": "false", "fitw": "true", "scale": "4", "gridlines": "false", "sheetnames": "false", "pagenumbers": "false", "horizontal_alignment": "CENTER", "vertical_alignment": "TOP", "top_margin": "0.15", "bottom_margin": "0.15", "left_margin": "0.15", "right_margin": "0.15"},
         headers={"Authorization": f"Bearer {credentials.token}"},
         timeout=60,
         follow_redirects=True,
@@ -620,13 +724,17 @@ def row_style(row_type: str) -> tuple[str, str]:
 
 
 def ratio_color(ratio: float) -> str:
-    if ratio < 0.03:
-        return "#f77b73"
-    if ratio < 0.06:
-        return "#f6ad76"
-    if ratio < 0.10:
-        return "#f4e78b"
-    return "#9fce94"
+    # Same three-stop scale as the original openpyxl report:
+    # red at 0%, yellow at 4%, and green at 12% or above.
+    stops = ((0.00, "#F8696B"), (0.04, "#FFEB84"), (0.12, "#63BE7B"))
+    bounded = min(max(float(ratio), stops[0][0]), stops[-1][0])
+    for (low_value, low_color), (high_value, high_color) in zip(stops, stops[1:]):
+        if bounded <= high_value:
+            fraction = (bounded - low_value) / (high_value - low_value)
+            low = tuple(int(low_color[index:index + 2], 16) for index in (1, 3, 5))
+            high = tuple(int(high_color[index:index + 2], 16) for index in (1, 3, 5))
+            return "#" + "".join(f"{round(a + (b - a) * fraction):02X}" for a, b in zip(low, high))
+    return stops[-1][1]
 
 
 def load_font(size: int, bold: bool = False) -> ImageFont.ImageFont:
