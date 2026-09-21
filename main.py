@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from typing import Any
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+from report_tri_an import ReportDataError, build_tri_an_summary
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("line-bot")
@@ -97,6 +100,19 @@ async def process_event(client: httpx.AsyncClient, event: dict[str, Any]) -> Non
         return
 
     user_text = remove_text_trigger(message_text)
+    report_date = tri_an_report_date(user_text)
+    if report_date is not None:
+        try:
+            report = await asyncio.to_thread(build_tri_an_summary, report_date)
+            await asyncio.to_thread(save_turn, conversation_id, user_text, report.summary)
+            await reply_to_line(client, reply_token, report.summary)
+        except ReportDataError as error:
+            logger.warning("Tri-an report input error: %s", error)
+            await reply_to_line(client, reply_token, f"Chưa tạo được báo cáo: {error}")
+        except Exception:
+            logger.exception("Could not create the tri-an report")
+            await reply_to_line(client, reply_token, "Chưa tạo được báo cáo tri ân. Bạn thử lại sau ít phút nhé.")
+        return
     search_web = web_search_requested(user_text)
     user_text = remove_web_trigger(user_text)
     if not user_text:
@@ -132,6 +148,26 @@ def remove_text_trigger(text: str) -> str:
     if text.casefold().startswith(TEXT_TRIGGER):
         return text[len(TEXT_TRIGGER):].strip()
     return text
+
+
+def tri_an_report_date(text: str) -> str | None:
+    """Return the optional requested date for the explicit report command."""
+    normalized = text.strip().casefold()
+    commands = (
+        "/bao-cao-tri-an",
+        "/bao_cao_tri_an",
+        "/tri-an",
+        "báo cáo tri ân",
+        "bao cao tri an",
+    )
+    command = next((value for value in commands if normalized.startswith(value)), None)
+    if command is None:
+        return None
+    suffix = text.strip()[len(command):].strip()
+    if not suffix:
+        return ""
+    date_match = re.search(r"\d{4}-\d{2}-\d{2}", suffix)
+    return date_match.group(0) if date_match else suffix
 
 
 def web_search_requested(text: str) -> bool:

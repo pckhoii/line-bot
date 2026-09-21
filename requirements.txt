@@ -1,3 +1,6 @@
 fastapi==0.135.1
 uvicorn[standard]==0.41.0
 httpx==0.28.1
+pandas==2.3.3
+google-api-python-client==2.187.0
+google-auth>=2.41,<3
